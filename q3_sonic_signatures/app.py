@@ -46,9 +46,22 @@ import pickle
 
 st.title("Song Identifier")
 
+import os
+import gdown
+
+DATABASE_PATH = "database/hash_database.pkl"
+
 @st.cache_resource
 def load_database():
-    with open("database/hash_database.pkl", "rb") as f:
+    if not os.path.exists(DATABASE_PATH):
+        os.makedirs("database", exist_ok=True)
+
+        file_id = "119ZZGO7Rb2TofaKx1qZiuMhUf_DrDKiV"
+        url = f"https://drive.google.com/uc?id={file_id}"
+
+        gdown.download(url, DATABASE_PATH, quiet=False)
+
+    with open(DATABASE_PATH, "rb") as f:
         return pickle.load(f)
 
 database = load_database()
