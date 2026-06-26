@@ -93,8 +93,50 @@ def identify_song(q_hashes, database):
 
 def process_audio(path):
     f, t, S = song_spectrogram(path)
+    fig, ax = plt.subplots(figsize=(10,4))
+    ax.pcolormesh(t, f, 10*np.log10(S + 1e-10), shading="gouraud")
+    ax.set_title("Spectrogram")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Frequency (Hz)")
+    plt.colorbar(ax.collections[0], ax=ax)
+    st.subheader("1. Spectrogram")
+    st.pyplot(fig)
     peaks = extract_peaks(f, t, S)
+    fig2, ax2 = plt.subplots(figsize=(10,4))
+
+    times = [p[0] for p in peaks]
+    freqs = [p[1] for p in peaks]
+
+    ax2.scatter(times, freqs, s=4, color="red")
+    ax2.set_title("Peak Constellation")
+    ax2.set_xlabel("Time (s)")
+    ax2.set_ylabel("Frequency (Hz)")
+
+    st.subheader("2. Peak Constellation")
+    st.pyplot(fig2)
     hashes = generate_hashes(peaks)
+    fig3, ax3 = plt.subplots(figsize=(10,4))
+
+    step = max(1, len(hashes)//3000)
+
+    for hash_key, t1 in hashes[::step]:
+        f1 = hash_key[0] * 10
+        f2 = hash_key[1] * 10
+        dt = hash_key[2] / 100
+
+        ax3.plot(
+            [t1, t1 + dt],
+            [f1, f2],
+            color="blue",
+            alpha=0.05
+    )
+
+    ax3.set_title("Fingerprint Hash Connections")
+    ax3.set_xlabel("Time (s)")
+    ax3.set_ylabel("Frequency (Hz)")
+
+    st.subheader("3. Fingerprint Hash Connections")
+    st.pyplot(fig3)
     result = identify_song(hashes, database)
 
     if result is None:
