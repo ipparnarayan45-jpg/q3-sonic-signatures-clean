@@ -1,3 +1,19 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import signal
+from scipy.ndimage import maximum_filter
+import pandas as pd
+import streamlit as st
+import librosa
+
+from collections import defaultdict
+import os
+import pickle
+import tempfile
+import zipfile
+import gdown
+
+# ALGORITHM
 
 def generate_hashes(peaks,tar_t=3,fan_value=10):
     peaks=sorted(peaks,key=lambda x:x[0])
@@ -15,7 +31,6 @@ def generate_hashes(peaks,tar_t=3,fan_value=10):
             hash_key=(int(f1//10),int(f2//10),int(dt*100))
             hashes.append((hash_key,round(t1,2)))
     return hashes
-from scipy.ndimage import maximum_filter
 
 def extract_peaks(f,t,S,percentile=95,size=15):
     S_db=10*np.log10(S+1e-10)
@@ -27,12 +42,7 @@ def extract_peaks(f,t,S,percentile=95,size=15):
     freq_a=f[freq]
     time_a=t[time]
     return list(zip(time_a,freq_a))
-from collections import defaultdict
-import tempfile
-import numpy as np
-import matplotlib.pyplot as plt
-import librosa
-from scipy import signal
+
 def song_spectrogram(path,window=4096):
     song,fs=librosa.load(path,sr=None)
 
@@ -41,22 +51,115 @@ def song_spectrogram(path,window=4096):
     noverlap=window//2,
     )
     return f,t,S
-from collections import defaultdict
-import os
-import pickle
-import tempfile
-import zipfile
-import pandas as pd
-import streamlit as st
-import gdown
 
-# ---------------- DATABASE ----------------
+
+
+# IDENTIFICATION
+
+def identify_song(q_hashes, database):
+    votes = defaultdict(int)
+
+    for hash_key, q_time in q_hashes:
+        matches = database.get(hash_key)
+        if matches is None:
+            continue
+
+        for song_name, time_db in matches:
+            offset = round(time_db - q_time, 1)
+            votes[(song_name, offset)] += 1
+
+    if not votes:
+        return None
+
+    return sorted(votes.items(), key=lambda x: x[1], reverse=True)[0]
+
+def process_audio(path, show_plots=True):
+    f, t, S = song_spectrogram(path)
+
+    if show_plots:
+        fig, ax = plt.subplots(figsize=(10,4))
+        ax.pcolormesh(t, f, 10*np.log10(S + 1e-10), shading="gouraud")
+        ax.set_title("Spectrogram")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Frequency (Hz)")
+        plt.colorbar(ax.collections[0], ax=ax)
+        st.subheader("1. Spectrogram")
+        st.pyplot(fig)
+        plt.close(fig)
+
+    peaks = extract_peaks(f, t, S)
+    times = [p[0] for p in peaks]
+    freqs = [p[1] for p in peaks]
+
+    if show_plots:
+        fig2, ax2 = plt.subplots(figsize=(10,4))
+        ax2.scatter(times, freqs, s=4, color="red")
+        ax2.set_title("Peak Constellation")
+        ax2.set_xlabel("Time (s)")
+        ax2.set_ylabel("Frequency (Hz)")
+        st.subheader("2. Peak Constellation")
+        st.pyplot(fig2)
+        plt.close(fig2)
+
+    hashes = generate_hashes(peaks)
+    step = max(1, len(hashes)//3000)
+
+
+    if show_plots:
+        fig3, ax3 = plt.subplots(figsize=(10,4))
+        for hash_key, t1 in hashes[::step]:
+            f1 = hash_key[0] * 10
+            f2 = hash_key[1] * 10
+            dt = hash_key[2] / 100
+
+            ax3.plot(
+                [t1, t1 + dt],
+                [f1, f2],
+                color="blue",
+                alpha=0.05
+            )
+
+        ax3.set_title("Fingerprint Hash Connections")
+        ax3.set_xlabel("Time (s)")
+        ax3.set_ylabel("Frequency (Hz)")
+        st.subheader("3. Fingerprint Hash Connections")
+        st.pyplot(fig3)
+        plt.close(fig3)
+
+    result = identify_song(hashes, database)
+
+    if result is None:
+        return {
+            "Song": "No Match",
+            "Offset": "-",
+            "Votes": 0,
+            "Confidence": 0,
+            "Peaks": len(peaks),
+            "Hashes": len(hashes),
+        }
+
+    (song, offset), score = result
+    confidence = score / max(len(hashes), 1)
+
+    return {
+        "Song": song,
+        "Offset": offset,
+        "Votes": score,
+        "Confidence": confidence,
+        "Peaks": len(peaks),
+        "Hashes": len(hashes),
+    }
+
+
+
+# DATABASE
 
 DATABASE_PATH = "database/hash_database.pkl"
 
 @st.cache_resource
 def load_database():
-    if not os.path.exists(DATABASE_PATH):
+    if (not os.path.exists(DATABASE_PATH) 
+        or os.path.getsize(DATABASE_PATH) == 0):
         os.makedirs("database", exist_ok=True)
 
         file_id = "119ZZGO7Rb2TofaKx1qZiuMhUf_DrDKiV"
@@ -72,91 +175,10 @@ st.title("Song Identifier")
 st.success("Database loaded successfully!")
 st.write(f"Total fingerprints loaded: {len(database)}")
 
-# ---------------- IDENTIFICATION ----------------
-
-def identify_song(q_hashes, database):
-    votes = defaultdict(int)
-
-    for hash_key, q_time in q_hashes:
-        if hash_key not in database:
-            continue
-
-        for song_name, time_db in database[hash_key]:
-            offset = round(time_db - q_time, 1)
-            votes[(song_name, offset)] += 1
-
-    if not votes:
-        return None
-
-    return sorted(votes.items(), key=lambda x: x[1], reverse=True)[0]
 
 
-def process_audio(path):
-    f, t, S = song_spectrogram(path)
-    fig, ax = plt.subplots(figsize=(10,4))
-    ax.pcolormesh(t, f, 10*np.log10(S + 1e-10), shading="gouraud")
-    ax.set_title("Spectrogram")
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Frequency (Hz)")
-    plt.colorbar(ax.collections[0], ax=ax)
-    st.subheader("1. Spectrogram")
-    st.pyplot(fig)
-    peaks = extract_peaks(f, t, S)
-    fig2, ax2 = plt.subplots(figsize=(10,4))
-
-    times = [p[0] for p in peaks]
-    freqs = [p[1] for p in peaks]
-
-    ax2.scatter(times, freqs, s=4, color="red")
-    ax2.set_title("Peak Constellation")
-    ax2.set_xlabel("Time (s)")
-    ax2.set_ylabel("Frequency (Hz)")
-
-    st.subheader("2. Peak Constellation")
-    st.pyplot(fig2)
-    hashes = generate_hashes(peaks)
-    fig3, ax3 = plt.subplots(figsize=(10,4))
-
-    step = max(1, len(hashes)//3000)
-
-    for hash_key, t1 in hashes[::step]:
-        f1 = hash_key[0] * 10
-        f2 = hash_key[1] * 10
-        dt = hash_key[2] / 100
-
-        ax3.plot(
-            [t1, t1 + dt],
-            [f1, f2],
-            color="blue",
-            alpha=0.05
-    )
-
-    ax3.set_title("Fingerprint Hash Connections")
-    ax3.set_xlabel("Time (s)")
-    ax3.set_ylabel("Frequency (Hz)")
-
-    st.subheader("3. Fingerprint Hash Connections")
-    st.pyplot(fig3)
-    result = identify_song(hashes, database)
-
-    if result is None:
-        return {
-            "Song": "No Match",
-            "Offset": "-",
-            "Votes": 0,
-            "Peaks": len(peaks),
-            "Hashes": len(hashes),
-        }
-
-    (song, offset), score = result
-    return {
-        "Song": song,
-        "Offset": offset,
-        "Votes": score,
-        "Peaks": len(peaks),
-        "Hashes": len(hashes),
-    }
-
+# MODES
+ 
 mode = st.radio("Mode", ["Single Clip", "Batch (ZIP)"])
 
 if mode == "Single Clip":
@@ -176,7 +198,10 @@ if mode == "Single Clip":
             tmp.write(uploaded.read())
             path = tmp.name
 
-        result = process_audio(path)
+        try:
+            result = process_audio(path, show_plots=True)
+        finally:
+            os.remove(path)
 
         st.write("Peaks found:", result["Peaks"])
         st.write("Hashes generated:", result["Hashes"])
@@ -188,7 +213,7 @@ if mode == "Single Clip":
             st.write("Song:", result["Song"])
             st.write("Offset:", result["Offset"])
             st.write("Votes:", result["Votes"])
-
+            st.write("Confidence:", result['Confidence'])
 else:
 
     uploaded_zip = st.file_uploader(
@@ -216,12 +241,13 @@ else:
                     if file.lower().endswith((".wav", ".mp3")):
 
                         full_path = os.path.join(root, file)
-                        result = process_audio(full_path)
+                        result = process_audio(full_path, show_plots=False)
 
                         rows.append({
                             "File": file,
                             "Predicted Song": result["Song"],
                             "Votes": result["Votes"],
+                            "Confidence": result["Confidence"],
                             "Offset": result["Offset"],
                             "Peaks": result["Peaks"],
                             "Hashes": result["Hashes"],
