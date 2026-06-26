@@ -33,7 +33,12 @@ import matplotlib.pyplot as plt
 import librosa
 from scipy import signal
 def song_spectrogram(path,window=4096):
-    song,fs=librosa.load(path,sr=None)
+    song, fs = librosa.load(
+    path,
+    sr=None,
+    mono=True,
+    duration=30      # only first 30 seconds
+)
 
     f,t,S=signal.spectrogram(song,fs,
     nperseg=window,
