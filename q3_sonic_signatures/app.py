@@ -164,12 +164,29 @@ def load_database():
 
         file_id = "119ZZGO7Rb2TofaKx1qZiuMhUf_DrDKiV"
         url = f"https://drive.google.com/uc?id={file_id}"
-        gdown.download(url, DATABASE_PATH, quiet=False)
+        output = gdown.download(url, DATABASE_PATH, quiet=False)
+
+        if output is None or not os.path.exists(DATABASE_PATH):
+            raise RuntimeError("Database download failed.")
+    
+    st.write("Downloading complete")
+    st.write("Opening pickle...")
 
     with open(DATABASE_PATH, "rb") as f:
-        return pickle.load(f)
+        database = pickle.load(f)
+    
+    st.write("Pickle loaded")
+    st.write(f"Database entries: {len(database)}")
 
-database = load_database()
+    return database
+
+try:
+    database = load_database()
+    st.write(len(database))
+    st.success("Database loaded!")
+except Exception as e:
+    st.exception(e)
+    st.stop()
 
 st.title("Song Identifier")
 st.success("Database loaded successfully!")
