@@ -70,9 +70,7 @@ def load_database():
     with open(DATABASE_PATH, "rb") as f:
         return pickle.load(f)
 
-database = {}
-
-st.success("Dummy database loaded")
+database = load_database()
 
 st.title("Song Identifier")
 st.success("Database loaded successfully!")
