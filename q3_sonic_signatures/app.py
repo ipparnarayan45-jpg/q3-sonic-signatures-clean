@@ -1,4 +1,4 @@
-from collections import defaultdict
+
 def generate_hashes(peaks,tar_t=3,fan_value=10):
     peaks=sorted(peaks,key=lambda x:x[0])
 
@@ -41,13 +41,16 @@ def song_spectrogram(path,window=4096):
     noverlap=window//2,
     )
     return f,t,S
-import streamlit as st
-import pickle
-
-st.title("Song Identifier")
-
+from collections import defaultdict
 import os
+import pickle
+import tempfile
+import zipfile
+import pandas as pd
+import streamlit as st
 import gdown
+
+# ---------------- DATABASE ----------------
 
 DATABASE_PATH = "database/hash_database.pkl"
 
@@ -58,7 +61,6 @@ def load_database():
 
         file_id = "119ZZGO7Rb2TofaKx1qZiuMhUf_DrDKiV"
         url = f"https://drive.google.com/uc?id={file_id}"
-
         gdown.download(url, DATABASE_PATH, quiet=False)
 
     with open(DATABASE_PATH, "rb") as f:
@@ -66,68 +68,134 @@ def load_database():
 
 database = load_database()
 
+st.title("Song Identifier")
 st.success("Database loaded successfully!")
 st.write(f"Total fingerprints loaded: {len(database)}")
 
-uploaded_file = st.file_uploader(
-    "Upload an audio file",
-    type=["wav","mp3"]
-)
+# ---------------- IDENTIFICATION ----------------
 
-if uploaded_file is not None:
-    st.audio(uploaded_file)
-    st.success("Audio uploaded successfully!")
-    import tempfile
+def identify_song(q_hashes, database):
+    votes = defaultdict(int)
 
-if uploaded_file is not None:
-    st.audio(uploaded_file)
-    st.success("Audio uploaded successfully!")
+    for hash_key, q_time in q_hashes:
+        if hash_key not in database:
+            continue
 
-    import tempfile
+        for song_name, time_db in database[hash_key]:
+            offset = round(time_db - q_time, 1)
+            votes[(song_name, offset)] += 1
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
-        tmp_file.write(uploaded_file.read())
-        temp_path = tmp_file.name
+    if not votes:
+        return None
 
-    st.write(temp_path)
+    return sorted(votes.items(), key=lambda x: x[1], reverse=True)[0]
 
-    f, t, S = song_spectrogram(temp_path)
 
+def process_audio(path):
+    f, t, S = song_spectrogram(path)
     peaks = extract_peaks(f, t, S)
+    hashes = generate_hashes(peaks)
+    result = identify_song(hashes, database)
 
-    query_hashes = generate_hashes(peaks)
+    if result is None:
+        return {
+            "Song": "No Match",
+            "Offset": "-",
+            "Votes": 0,
+            "Peaks": len(peaks),
+            "Hashes": len(hashes),
+        }
 
-    st.write("Peaks found:", len(peaks))
-    st.write("Hashes generated:", len(query_hashes))
-    def identify_song(q_hashes, database):
-        votes = defaultdict(int)
+    (song, offset), score = result
+    return {
+        "Song": song,
+        "Offset": offset,
+        "Votes": score,
+        "Peaks": len(peaks),
+        "Hashes": len(hashes),
+    }
 
-        for hash_key, q_time in q_hashes:
-            if hash_key not in database:
-                continue
+mode = st.radio("Mode", ["Single Clip", "Batch (ZIP)"])
 
-            for song_name, time_db in database[hash_key]:
-                offset = round(time_db - q_time, 1)
-                votes[(song_name, offset)] += 1
+if mode == "Single Clip":
 
-        if len(votes) == 0:
-            return None
-
-        top = sorted(
-            votes.items(),
-            key=lambda x: x[1],
-            reverse=True
+    uploaded = st.file_uploader(
+        "Upload an audio file",
+        type=["wav", "mp3"],
+        key="single",
     )
 
-        return top[0]
-    result = identify_song(query_hashes, database)
+    if uploaded:
+        st.audio(uploaded)
 
-    if result is not None:
-        (song_name, offset), score = result
+        suffix = "." + uploaded.name.split(".")[-1]
 
-        st.success("Song Identified!")
-        st.write("Song:", song_name)
-        st.write("Offset:", offset)
-        st.write("Votes:", score)
-    else:
-        st.error("No matching song found")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(uploaded.read())
+            path = tmp.name
+
+        result = process_audio(path)
+
+        st.write("Peaks found:", result["Peaks"])
+        st.write("Hashes generated:", result["Hashes"])
+
+        if result["Song"] == "No Match":
+            st.error("No matching song found")
+        else:
+            st.success("Song Identified!")
+            st.write("Song:", result["Song"])
+            st.write("Offset:", result["Offset"])
+            st.write("Votes:", result["Votes"])
+
+else:
+
+    uploaded_zip = st.file_uploader(
+        "Upload ZIP containing .wav/.mp3 files",
+        type="zip",
+        key="zip",
+    )
+
+    if uploaded_zip:
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            zip_path = os.path.join(temp_dir, "songs.zip")
+
+            with open(zip_path, "wb") as f:
+                f.write(uploaded_zip.read())
+
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(temp_dir)
+
+            rows = []
+
+            for root, _, files in os.walk(temp_dir):
+                for file in files:
+                    if file.lower().endswith((".wav", ".mp3")):
+
+                        full_path = os.path.join(root, file)
+                        result = process_audio(full_path)
+
+                        rows.append({
+                            "File": file,
+                            "Predicted Song": result["Song"],
+                            "Votes": result["Votes"],
+                            "Offset": result["Offset"],
+                            "Peaks": result["Peaks"],
+                            "Hashes": result["Hashes"],
+                        })
+
+            if rows:
+                df = pd.DataFrame(rows)
+                st.dataframe(df, use_container_width=True)
+
+                csv = df.to_csv(index=False).encode("utf-8")
+
+                st.download_button(
+                    "Download Results CSV",
+                    csv,
+                    "results.csv",
+                    "text/csv",
+                )
+            else:
+                st.warning("No .wav or .mp3 files found in the ZIP.")
